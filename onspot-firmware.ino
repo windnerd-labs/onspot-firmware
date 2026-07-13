@@ -23,7 +23,7 @@
 
 #define MODEM_RESET_TIMEOUT_MN 20
 #define MCU_RESET_TIMEOUT_MN 60  // last-resort: full MCU reset if no upload succeeds for this long
-#define SOFT_VERSION "D-0.0.5"
+#define SOFT_VERSION "0.0.1"
 
 //#define APN "hologram"
 
