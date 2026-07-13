@@ -2,8 +2,6 @@
 
 **Live wind, wherever you need it.**
 
-**Release expected in July 2026**
-
 ![WindNerd OnSpot board](docs/onspot-board.jpg)
 
 WindNerd OnSpot is a sensor board for [3D printed anemometer](https://github.com/windnerd-labs/Anemometer-3D-files) that measures **wind speed
@@ -14,6 +12,8 @@ network. Insert a SIM card, mount it, switch it on, and your wind data starts fl
 - **Without compromise** — accurate wind speed and direction, sampled continuously and reported in high definition.
 - **Set and forget** — runs on solar/battery, adapting how often it uploads to preserve power.
 - **Optional pressure and temperature sensor** — an optional temperature/pressure sensor can be plugged onto the board. The temperature reading is not accurate in sun, but it can give a useful indication of the temperature at night.
+
+🛒 **[Complete solar kit available](https://windnerd.net/en/shop/windnerd-onspot-sunbank-2w)**
 
 
 ---
