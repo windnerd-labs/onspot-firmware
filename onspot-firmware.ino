@@ -23,7 +23,7 @@
 
 #define MODEM_RESET_TIMEOUT_MN 20
 #define MCU_RESET_TIMEOUT_MN 60  // last-resort: full MCU reset if no upload succeeds for this long
-#define SOFT_VERSION "0.0.1"
+#define SOFT_VERSION "0.1.1"
 
 //#define APN "hologram"
 
@@ -82,6 +82,7 @@ void processModemStateMachine() {
     case STARTING:
 
       telemetry.onCycleStart(A7670_manager.isPoweredOn());
+      A7670_manager.http_action_result = -1;
       power_manager.evaluate();
 
       if (is_first_cycle_after_reset) {
@@ -233,6 +234,7 @@ void processModemStateMachine() {
       break;
 
     case ON_FAILED:
+      LOG(LOG_W, "NET", "cycle=failed http=%d", A7670_manager.http_action_result);
       telemetry.onCycleResult(A7670_manager.http_action_result);
       sm.waitFixed(GO_SLEEP, 0);
       break;
