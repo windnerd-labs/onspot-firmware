@@ -11,6 +11,27 @@ static uint32_t days_from_civil(int y, unsigned m, unsigned d) {
   return (uint32_t)((int32_t)era * 146097 + (int32_t)doe - 719468);
 }
 
+// Copies an AT response value into a fixed buffer, dropping the characters the
+// telemetry meta encoding reserves: commas become '|', separators and anything
+// outside printable ASCII are skipped. Always NUL-terminates.
+static void copySanitised(char* dst, uint8_t dst_len, const char* src) {
+  uint8_t n = 0;
+  for (; *src != '\0' && n < dst_len - 1; src++) {
+    char c = *src;
+    if (c == ',') c = '|';
+    else if (c < ' ' || c > '~' || c == ';' || c == '=') continue;
+    dst[n++] = c;
+  }
+  dst[n] = '\0';
+}
+
+// Steps past an AT response prefix ("+CPSI:") and the spaces after it.
+static const char* afterPrefix(const char* line, uint8_t prefix_len) {
+  const char* p = line + prefix_len;
+  while (*p == ' ') p++;
+  return p;
+}
+
 #define A7670_RST PA7
 #define A7670_PWR_KEY PB0
 #define A7670_STATUS PA4
@@ -60,6 +81,14 @@ int A7670Manager::getRssi() const {
   return rssi;
 }
 
+const char* A7670Manager::getCpsi() const {
+  return cpsi;
+}
+
+const char* A7670Manager::getFirmwareVersion() const {
+  return fw_version;
+}
+
 uint32_t A7670Manager::getUnixTime() const {
   if (cclk_unix_time == 0) return 0;
   return cclk_unix_time + (millis() - cclk_anchor_ms) / 1000;
@@ -72,8 +101,10 @@ bool A7670Manager::readA7670StatusPin() {
 void A7670Manager::powerOnOrReset() {
 
   // Modem is about to be reset or just powered on — any prior SIM / PDP
-  // state is stale until the new URCs arrive.
+  // state is stale until the new URCs arrive
   conn_state = ConnectivityState::UNKNOWN;
+  cpsi[0] = '\0';
+  fw_version[0] = '\0';
 
   if (readA7670StatusPin()) {
     digitalWrite(A7670_RST, LOW);
@@ -141,6 +172,16 @@ void A7670Manager::onLineReceived(const char* line) {
       rssi = (csq == 99) ? RSSI_UNKNOWN : (-113 + 2 * csq);
       LOG(LOG_I, "NET", "rssi=%d", rssi);
     }
+  } else if (strncmp(line, "+CPSI:", 6) == 0) {
+    // Kept whole rather than parsed: the field list varies with radio
+    // technology and firmware revision
+    copySanitised(cpsi, CPSI_BUF_LEN, afterPrefix(line, 6));
+    LOG(LOG_I, "NET", "cpsi=%s", cpsi);
+  } else if (strncmp(line, "+CGMR:", 6) == 0) {
+    // Modem firmware revision. Reported once per power cycle and latched, so
+    // later cycles can put it in the telemetry meta without re-querying.
+    copySanitised(fw_version, FW_BUF_LEN, afterPrefix(line, 6));
+    LOG(LOG_I, "MDM", "fw=%s", fw_version);
   } else if (strncmp(line, "+CCLK:", 6) == 0) {
     int yy, mo, dd, hh, mm, ss, tz_q;
     if (sscanf(line, "+CCLK: \"%d/%d/%d,%d:%d:%d%d\"",

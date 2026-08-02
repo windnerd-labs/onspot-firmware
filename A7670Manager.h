@@ -25,6 +25,10 @@ public:
   void onLineReceived(const char* line);
   bool isPoweredOn();
   int getRssi() const;
+  // Serving-cell line from the last +CPSI response, sanitised
+  const char* getCpsi() const;
+  // Modem firmware revision from the last +CGMR response, sanitised
+  const char* getFirmwareVersion() const;
   uint32_t getUnixTime() const;
   ConnectivityState getConnectivityState() const {
     return conn_state;
@@ -38,7 +42,12 @@ public:
 private:
   bool readA7670StatusPin();
 
+  static const uint8_t CPSI_BUF_LEN = 96;
+  static const uint8_t FW_BUF_LEN = 32;
+
   int rssi = RSSI_UNKNOWN;
+  char cpsi[CPSI_BUF_LEN] = "";
+  char fw_version[FW_BUF_LEN] = "";
   uint32_t cclk_unix_time = 0;
   uint32_t cclk_anchor_ms = 0;
   ConnectivityState conn_state = ConnectivityState::UNKNOWN;

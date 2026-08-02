@@ -23,7 +23,7 @@
 
 #define MODEM_RESET_TIMEOUT_MN 20
 #define MCU_RESET_TIMEOUT_MN 60  // last-resort: full MCU reset if no upload succeeds for this long
-#define SOFT_VERSION "0.1.1"
+#define SOFT_VERSION "0.1.2"
 
 //#define APN "hologram"
 
@@ -113,7 +113,7 @@ void processModemStateMachine() {
       }
 
       sendCommandToModem("AT");
-      sm.waitForResponse("OK", 2000, REQUEST_TIME, REQUEST_TIME);
+      sm.waitForResponse("OK", 2000, START_FROM_ON, START_FROM_ON);
       break;
 
     case START_FROM_OFF:
@@ -136,9 +136,15 @@ void processModemStateMachine() {
 #endif
     case ENABLE_TIME:
       sendCommandToModem("AT+CTZU=1");
-      sm.waitForResponse("OK", 1000, REQUEST_TIME, REQUEST_TIME);
+      sm.waitForResponse("OK", 1000, REQUEST_FW_VERSION, REQUEST_FW_VERSION);
       break;
 
+    case REQUEST_FW_VERSION:
+      sendCommandToModem("AT+CGMR");
+      sm.waitForResponse("+CGMR", 1000, REQUEST_TIME, REQUEST_TIME);  // response parsed in A7670manager
+      break;
+
+    case START_FROM_ON:
     case REQUEST_TIME:
       sendCommandToModem("AT+CCLK?");
       sm.waitForResponse("+CCLK", 1000, REQUEST_RSSI, REQUEST_RSSI);  // response parsed in A7670manager
@@ -146,7 +152,12 @@ void processModemStateMachine() {
 
     case REQUEST_RSSI:
       sendCommandToModem("AT+CSQ");
-      sm.waitForResponse("+CSQ", 1000, TERMINATE_HTTP, TERMINATE_HTTP);  // response parsed in A7670manager
+      sm.waitForResponse("+CSQ", 1000, REQUEST_CPSI, REQUEST_CPSI);  // response parsed in A7670manager
+      break;
+
+    case REQUEST_CPSI:
+      sendCommandToModem("AT+CPSI?");
+      sm.waitForResponse("+CPSI", 1000, TERMINATE_HTTP, TERMINATE_HTTP);  // response parsed in A7670manager
       break;
 
     case TERMINATE_HTTP:
@@ -204,6 +215,9 @@ void processModemStateMachine() {
         if (rssi != A7670Manager::RSSI_UNKNOWN) {
           Wtp_payload.setRSSI(rssi);
         }
+
+        telemetry.setCpsi(A7670_manager.getCpsi());
+        telemetry.setModemFirmware(A7670_manager.getFirmwareVersion());
 
         telemetry.onSetHeaders();
         Wtp_payload.setMeta(telemetry.buildMeta());

@@ -25,6 +25,15 @@ void Telemetry::setVersion(const char* v) {
   version = v;
 }
 
+// a raw log of LTE network info 
+void Telemetry::setCpsi(const char* c) {
+  cpsi = (c != NULL) ? c : "";
+}
+
+void Telemetry::setModemFirmware(const char* fw) {
+  modem_fw = (fw != NULL) ? fw : "";
+}
+
 void Telemetry::onCycleStart(bool a7670_powered) {
   a7670_powered_at_start = a7670_powered;
   cycle_start_ms = millis();
@@ -64,10 +73,13 @@ static const char* stepName(Modem_steps s) {
   switch (s) {
     case STARTING: return "STARTING";
     case START_FROM_OFF: return "START_FROM_OFF";
+    case START_FROM_ON: return "START_FROM_ON";
     case SET_APN: return "SET_APN";
     case ENABLE_TIME: return "ENABLE_TIME";
+    case REQUEST_FW_VERSION: return "REQUEST_FW";
     case REQUEST_TIME: return "REQUEST_TIME";
     case REQUEST_RSSI: return "REQUEST_RSSI";
+    case REQUEST_CPSI: return "REQUEST_CPSI";
     case TERMINATE_HTTP: return "TERMINATE_HTTP";
     case INIT: return "INIT";
     case INIT_RETRY: return "INIT_RETRY";
@@ -82,18 +94,28 @@ static const char* stepName(Modem_steps s) {
 
 const char* Telemetry::buildMeta() {
   unsigned long uptime_s = millis() / 1000UL;
-  int n = snprintf(meta_buffer, sizeof(meta_buffer),
-                   "ver=%s,rst=%s,up=%lu,pwr=%u,sh=%lu,sg=%lu,cf=%u",
-                   version,
-                   reset_cause,
-                   uptime_s,
-                   (unsigned)(a7670_powered_at_start ? 1 : 0),
-                   t_start_to_set_headers_ms,
-                   t_set_headers_to_go_sleep_ms,
-                   consecutive_failures);
-  if (n > 0 && (size_t)n < sizeof(meta_buffer) && last_http_code != 0 && last_http_code != 200) {
-    snprintf(meta_buffer + n, sizeof(meta_buffer) - n,
+  snprintf(meta_buffer, sizeof(meta_buffer),
+           "ver=%s,rst=%s,up=%lu,pwr=%u,sh=%lu,sg=%lu,cf=%u",
+           version,
+           reset_cause,
+           uptime_s,
+           (unsigned)(a7670_powered_at_start ? 1 : 0),
+           t_start_to_set_headers_ms,
+           t_set_headers_to_go_sleep_ms,
+           consecutive_failures);
+
+  size_t used = strlen(meta_buffer);
+  if (cpsi[0] != '\0') {
+    snprintf(meta_buffer + used, sizeof(meta_buffer) - used, ",cpsi=%s", cpsi);
+    used = strlen(meta_buffer);
+  }
+  if (last_http_code != 0 && last_http_code != 200) {
+    snprintf(meta_buffer + used, sizeof(meta_buffer) - used,
              ",fail=%d,fstep=%s", last_http_code, stepName(fail_step));
+    used = strlen(meta_buffer);
+  }
+  if (modem_fw[0] != '\0') {
+    snprintf(meta_buffer + used, sizeof(meta_buffer) - used, ",mfw=%s", modem_fw);
   }
   return meta_buffer;
 }
