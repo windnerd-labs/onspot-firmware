@@ -61,7 +61,7 @@ Each sample is packed big-endian, MSB-first:
 | Bits    | Width | Field        | Encoding                                                        |
 | ------- | ----- | ------------ | --------------------------------------------------------------- |
 | 23 – 14 | 10    | `wind_speed` | `round(m/s × 10)`, range 0 – 990 → 0.0 – 99.0 m/s, 0.1 m/s step |
-| 13 – 5  | 9     | `wind_dir`   | degrees, range 0 – 359                                          |
+| 13 – 5  | 9     | `wind_dir`   | degrees, range 0 – 359, or `0x1FF` (511) = direction unknown |
 | 4 – 0   | 5     | reserved     | must be `0` (room for future use)              |
 
 ```
@@ -69,6 +69,8 @@ Each sample is packed big-endian, MSB-first:
  SSSS SSSS        SS DD DDDD       DDD R RRRR
  |--- speed[9:2]|sp|----dir[8:3]||dir[2:0]|rsv|
 ```
+
+`wind_dir = 0x1FF` (all bits set, the 9-bit counterpart of the `-1` code used by the other WTP routes) means no direction could be measured for that sample, e.g. vane sensor absent or faulty. The speed is still valid. The server stores no direction for it and leaves it out of the direction average.
 
 ### Extras block (optional, variable length)
 
@@ -130,7 +132,7 @@ With meta block: add `1 + meta_len` bytes.
 3. `device_id` is known, otherwise → `401`.
 4. HMAC tag matches, otherwise → `401`.
 5. `timestamp` within accepted window AND `(device_id, timestamp)` not already used, otherwise → `409`.
-6. Each sample's reserved bits are zero and `wind_speed ≤ 990`, `wind_dir ≤ 359`, otherwise → `400`.
+6. Each sample's reserved bits are zero and `wind_speed ≤ 990`, `wind_dir ≤ 359` or `wind_dir = 0x1FF`, otherwise → `400`.
 7. If present, `meta` characters are inside the allowed ASCII set, otherwise → `400`.
 
 ---

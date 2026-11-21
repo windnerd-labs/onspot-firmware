@@ -18,6 +18,10 @@ extern "C" {
 #define OTP_KEY_ADDR    (OTP_BASE + 0x04)   // uint8_t[16] wtp key
 #define WTP_KEY_LEN     16
 
+// all ones in the 9-bit direction field, the binary counterpart of the -1
+// "direction unknown" code used by the other WTP routes
+#define WTP_DIR_UNKNOWN 0x1FF
+
 WtpBinaryPayload::WtpBinaryPayload() {
 }
 
@@ -100,7 +104,7 @@ unsigned int WtpBinaryPayload::calculatePayloadLength() {
 
 // Pack one wind sample into 3 big-endian bytes:
 //   bits 23-14 : speed (round(m/s * 10), 0..990)
-//   bits 13-5  : direction (0..359)
+//   bits 13-5  : direction (0..359, or WTP_DIR_UNKNOWN)
 //   bits 4-0   : reserved (0)
 void WtpBinaryPayload::packSample(const wn_instant_wind_sample_t& sample, uint8_t out[3]) {
   int speed = (int)(sample.speed * 10.0f + 0.5f);
@@ -108,8 +112,9 @@ void WtpBinaryPayload::packSample(const wn_instant_wind_sample_t& sample, uint8_
   if (speed > 990) speed = 990;
 
   int dir = (int)sample.dir;
-  if (dir < 0) dir = 0;
-  if (dir > 359) dir = 359;
+  if (dir == WN_DIR_UNKNOWN) dir = WTP_DIR_UNKNOWN;
+  else if (dir < 0) dir = 0;
+  else if (dir > 359) dir = 359;
 
   uint32_t packed = ((uint32_t)speed << 14) | ((uint32_t)dir << 5);
   out[0] = (uint8_t)((packed >> 16) & 0xFF);
