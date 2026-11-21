@@ -296,6 +296,16 @@ void setup() {
   telemetry.captureResetCause();
   telemetry.setVersion(SOFT_VERSION);
 
+  // boot sequence to power up TMAG: pulse PA15 low then high, then drive PB3 high
+  //PA15 and PB3 are unconnected for OnSpot serial < 130
+  pinMode(PA15, OUTPUT);
+  digitalWrite(PA15, LOW); // discharge decoupling capacitor through resistor
+  delay(200);
+  digitalWrite(PA15, HIGH);// charge decoupling capacitor through resistor
+  delay(20);
+  pinMode(PB3, OUTPUT); // direct powering
+  digitalWrite(PB3, HIGH);
+
   initWatchdog();
   delay(200);
 
