@@ -14,6 +14,8 @@
 //   sh    = STARTING -> SET_HEADERS duration (ms, current cycle)
 //   sg    = SET_HEADERS -> GO_SLEEP duration (ms, previous cycle)
 //   cf    = consecutive non-200 upload cycles (reset to 0 on a 200)
+//   rm    = running mode set by the operator, applied from the server reply:
+//           i<mn> = upload interval in minutes (omitted in auto)
 //   cpsi  = serving-cell line from AT+CPSI?, commas rewritten as '|'
 //           (omitted until the modem has answered one)
 //   fail  = HTTP code of previous cycle (only when not 200)
@@ -40,6 +42,10 @@ public:
   // the same lifetime requirement as setCpsi().
   void setModemFirmware(const char* fw);
 
+  // Operator upload interval in minutes, reported as `rm=i<mn>`; 0 = auto
+  // (omitted)
+  void setRunningMode(uint8_t interval_mn);
+
   void onCycleStart(bool a7670_powered);
   // Called once per executed state-machine step; tracks the furthest protocol
   // command step reached so a failure can be attributed to it.
@@ -64,6 +70,7 @@ private:
   unsigned long t_set_headers_to_go_sleep_ms = 0;
   int last_http_code = 0;
   unsigned consecutive_failures = 0;
+  uint8_t interval_override_mn = 0;
   Modem_steps last_protocol_step = STARTING;
   Modem_steps fail_step = STARTING;
   char meta_buffer[256] = { 0 };

@@ -69,6 +69,10 @@ void Telemetry::onCycleResult(int http_code) {
   }
 }
 
+void Telemetry::setRunningMode(uint8_t interval_mn) {
+  interval_override_mn = interval_mn;
+}
+
 static const char* stepName(Modem_steps s) {
   switch (s) {
     case STARTING: return "STARTING";
@@ -105,6 +109,10 @@ const char* Telemetry::buildMeta() {
            consecutive_failures);
 
   size_t used = strlen(meta_buffer);
+  if (interval_override_mn != 0) {
+    snprintf(meta_buffer + used, sizeof(meta_buffer) - used, ",rm=i%u", (unsigned)interval_override_mn);
+    used = strlen(meta_buffer);
+  }
   if (cpsi[0] != '\0') {
     snprintf(meta_buffer + used, sizeof(meta_buffer) - used, ",cpsi=%s", cpsi);
     used = strlen(meta_buffer);

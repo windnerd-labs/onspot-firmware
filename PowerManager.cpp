@@ -3,17 +3,25 @@
 
 
 
-#define POWER_CONFIGS_LENGTH 4
 // Voltage tiers sorted descending by min_voltage (highest tier first).
-const PowerConfig power_configs[POWER_CONFIGS_LENGTH] = {
-  { 4.05f, 1, false },
-  { 3.9f, 2, false },
-  { 3.75f, 4, false },
-  { 3.65f, 6, true },
+// period_mn must not exceed 20: WTP-bin carries at most 20 minutes of samples
+// and the anemometer rolling buffer holds exactly that much.
+const PowerConfig power_configs[] = {
+  { 4.05f, 1 },
+  { 3.95f, 2 },
+  { 3.90f, 4 },
+  { 3.80f, 6 },
+  { 3.75f, 10 },
+  { 3.65f, 20 },
 };
+#define POWER_CONFIGS_LENGTH (sizeof(power_configs) / sizeof(power_configs[0]))
 
 
 #define HYSTERESIS 0.04f
+
+// Above this upload period the modem is powered off between uploads instead of
+// sleeping: re-registering costs less than idling that long
+#define POWER_OFF_ABOVE_MN 8
 
 
 PowerManager::PowerManager(uint8_t pin) {
@@ -65,11 +73,20 @@ float PowerManager::getVoltage() const {
 }
 
 uint8_t PowerManager::getPeriod() const {
+  if (_interval_override_mn) return _interval_override_mn;
   return power_configs[_active_idx].period_mn;
 }
 
 bool PowerManager::shouldPowerOff() const {
-  return power_configs[_active_idx].power_off;
+  return getPeriod() > POWER_OFF_ABOVE_MN;
+}
+
+void PowerManager::setIntervalOverride(uint8_t period_mn) {
+  _interval_override_mn = period_mn;
+}
+
+uint8_t PowerManager::getIntervalOverride() const {
+  return _interval_override_mn;
 }
 
 bool PowerManager::shouldPowerOn() const {

@@ -23,6 +23,8 @@ enum Modem_steps {
   POST,
   ON_SUCCESS,
   ON_FAILED,
+  READ_REPLY,   // fetch the running-mode frame from the HTTP body
+  APPLY_REPLY,
   GO_SLEEP,
   SLEEP,
   OFF

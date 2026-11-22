@@ -14,7 +14,7 @@ POST  http://wtp.windnerd.net/bin
 ```
 
 **Content-Type:** `application/octet-stream`
-**Responses:** `200 Request accepted`, `400 Bad Request`, `401 Wrong Authentication`, `409 Replay Detected`
+**Responses:** `200 Request accepted` (body `OK`, or a signed running-mode frame, see [Reply](#reply)), `400 Bad Request`, `401 Wrong Authentication`, `409 Replay Detected`
 
 ## Authentication & integrity
 
@@ -43,12 +43,14 @@ POST  http://wtp.windnerd.net/bin
 | Offset | Size | Field          | Description                                                                 |
 | ------ | ---- | -------------- | --------------------------------------------------------------------------- |
 | 0      | 1    | `version`      | Protocol version. This document defines version `0x01`.                     |
-| 1      | 1    | `flags`        | bit 0 = meta block present, bit 1 = pressure present, bit 2 = temperature present. Bits 3–7 reserved, must be `0`. |
+| 1      | 1    | `flags`        | bit 0 = meta block present, bit 1 = pressure present, bit 2 = temperature present, bit 3 = `sample_count` counts minutes. Bits 4–7 reserved, must be `0`. |
 | 2      | 4    | `device_id`    | Station identifier (uint32). Issued in the station management console.      |
 | 6      | 4    | `timestamp`    | Unix epoch in seconds (uint32) of the most recent sample. Also the nonce.   |
-| 10     | 1    | `sample_count` | Number of samples in the body, 1–200.                                       |
+| 10     | 1    | `sample_count` | Number of samples in the body, 1–200. With flag bit 3: number of whole minutes, 1–20, so the body holds `20 × sample_count` samples (up to 400). |
 | 11     | 2    | `voltage_cv`   | Power-supply voltage in centivolts (uint16), range 0–65535 → 0.00–655.35 V. |
 | 13     | 1    | `rssi`         | Signal strength in dBm (int8), range −128 to 127.                           |
+
+Below, `N` is the number of samples in the body: `sample_count`, or `20 × sample_count` when flag bit 3 is set. Flag bit 3 is how a device uploading less often than every 10 minutes fits its samples in one message.
 
 Samples are always spaced **3 seconds** apart, so the timestamp of sample `i` (0 = most recent) is `timestamp - 3 × i`.
 
@@ -116,8 +118,9 @@ Without meta block:
 | 20      | 90          |
 | 60      | 210         |
 | 200     | 630         |
+| 400 (20 min, flag bit 3) | 1230 |
 
-`size = 14 + 3 × sample_count + extras_size + 16`
+`size = 14 + 3 × N + extras_size + 16`
 
 where `extras_size = 2 × popcount(flags & 0b00000110)` — 0, 2, or 4 bytes.
 
@@ -128,12 +131,58 @@ With meta block: add `1 + meta_len` bytes.
 ## Server validation order
 
 1. `version == 0x01` and reserved flag bits are zero, otherwise → `400`.
-2. Length matches `14 + 3 × sample_count + extras_size + (meta block, if flag set) + 16`, otherwise → `400`.
+2. `sample_count` is 1–200 (1–20 with flag bit 3), and the length matches `14 + 3 × N + extras_size + (meta block, if flag set) + 16`, otherwise → `400`.
 3. `device_id` is known, otherwise → `401`.
 4. HMAC tag matches, otherwise → `401`.
 5. `timestamp` within accepted window AND `(device_id, timestamp)` not already used, otherwise → `409`.
 6. Each sample's reserved bits are zero and `wind_speed ≤ 990`, `wind_dir ≤ 359` or `wind_dir = 0x1FF`, otherwise → `400`.
 7. If present, `meta` characters are inside the allowed ASCII set, otherwise → `400`.
+
+---
+
+## Reply
+
+A `200` carries the device's **running mode**, as set by its operator on windnerd.net. It is not an order: the server repeats the same running mode in every reply, and the device applies it every time it gets it. A lost reply is covered by the next one, so the device acknowledges nothing.
+
+- No running mode set: the body is the text `OK`.
+- Running mode set: the body is `application/octet-stream`, **22 bytes**:
+
+| Offset | Size | Field     | Description                                          |
+| ------ | ---- | --------- | ---------------------------------------------------- |
+| 0      | 1    | `version` | Reply version, `0x01`.                               |
+| 1      | 1    | `mode`    | The running mode, see the table below.               |
+| 2      | 4    | `value`   | Its parameter (int32, big-endian).                   |
+| 6      | 16   | `tag`     | See below.                                           |
+
+```
+tag = HMAC-Blake2s(key = secret_16B, message = timestamp || reply[0:6])[0:16]
+```
+
+`timestamp` is the 4-byte big-endian `timestamp` of the **request** this reply answers. Tying the tag to it means a reply can't be forged, and an old one can't be replayed to the device.
+
+The device applies the running mode only when the body is exactly 22 bytes, `version` is `0x01` and the tag matches. In every other case (`OK`, a bad tag, an unknown mode) it keeps its current running mode.
+
+A device runs in one mode at a time:
+
+| Mode   | Name        | Devices | Value                                                                 |
+| ------ | ----------- | ------- | --------------------------------------------------------------------- |
+| `0x00` | —           | —       | Reserved.                                                             |
+| `0x01` | `auto`      | OnSpot  | `0`. The firmware picks its upload interval itself. The default.      |
+| `0x02` | `interval`  | OnSpot  | Upload every `value` seconds: 60–1200, a multiple of 60.              |
+| `0x03` | `hibernate` | OnSpot  | `0`. No measuring; the firmware checks in at its own fixed period.    |
+
+The interval is whole minutes because the server aggregates samples into 1-minute records and drops an incomplete minute. An interval above 10 minutes needs flag bit 3 to fit its samples in one message.
+
+When the operator clears the running mode, the reply goes back to `OK` and the device keeps the running mode it applied last.
+
+Example: `interval` = 1200 s, answering a request whose `timestamp` is `0x6843B5F0`, with the key `06a489327ca7aab0d12424df47bdd35c`:
+
+```
+01                                          version
+02                                          mode  = interval
+00 00 04 B0                                 value = 1200
+7B F5 09 DC 16 DC 33 26 F3 86 82 16 E8 36 C2 CC   tag
+```
 
 ---
 

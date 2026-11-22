@@ -21,8 +21,13 @@
 
 #include "stm32g0xx_hal.h"  // necessary to change clock settings
 
-#define MODEM_RESET_TIMEOUT_MN 20
+// Recovery timeouts, measured from the last successful upload. Both are stretched
+// for long upload periods, see failureTimeoutMs()
+#define MODEM_RESET_TIMEOUT_MN 10
+#define MODEM_RESET_MIN_CYCLES 2  // + half a period: at a 20 mn period, reset after the 2nd failed cycle
 #define MCU_RESET_TIMEOUT_MN 60  // last-resort: full MCU reset if no upload succeeds for this long
+#define MCU_RESET_MIN_CYCLES 4   // + half a period: leaves room for a cycle after the modem reset
+#define MAX_UPLOAD_SPAN_MN 20     // WTP-bin limit (flag bit 3) and anemometer rolling buffer length
 #define SOFT_VERSION "0.1.2"
 
 //#define APN "hologram"
@@ -63,9 +68,66 @@ bool was_modem_started = false;
 char rx_buffer[RX_BUFFER_LENGTH];
 unsigned rx_pointer = 0;
 
+// Timeout (ms) for "no successful upload since": base_mn, but never shorter
+// than min_cycles upload periods
+unsigned long failureTimeoutMs(unsigned base_mn, unsigned min_cycles) {
+  unsigned period_mn = power_manager.getPeriod();
+  unsigned half_minutes = 2 * max(base_mn, min_cycles * period_mn) + period_mn;
+  return half_minutes * 30000UL;
+}
+
 void sendCommandToModem(const char* cmd) {
   SerialA7670.println(cmd);
   LOG(LOG_D, "MDM", "> %s", cmd);
+}
+
+// Upload periods long enough to power the modem off between uploads also
+// put the anemometer in low power mode (vane read every 500 ms, LEDs off)
+void syncAnemometerPowerMode() {
+  if (power_manager.shouldPowerOff() == Anemometer.isLowPowerMode()) return;
+  if (power_manager.shouldPowerOff()) {
+    Anemometer.enableLowPowerMode();
+  } else {
+    Anemometer.disableLowPowerMode();
+  }
+  LOG(LOG_I, "PWR", "anemometer_low_power=%d", Anemometer.isLowPowerMode());
+}
+
+// Applies the running mode the operator set on windnerd.net, carried by the
+// reply to the upload (WTP-bin.md, "Reply"). The server repeats it in every
+// reply
+void applyRunningModeReply() {
+  uint8_t len;
+  const uint8_t* body = A7670_manager.getHttpBody(&len);
+  uint8_t mode;
+  int32_t value;
+  if (!Wtp_payload.parseReply(body, len, &mode, &value)) {
+    LOG(LOG_W, "CFG", "reply=invalid len=%u", (unsigned)len);
+    return;
+  }
+
+  uint8_t interval_mn;
+  switch (mode) {
+    case WtpBinaryPayload::REPLY_MODE_AUTO:
+      interval_mn = 0;
+      break;
+    case WtpBinaryPayload::REPLY_MODE_INTERVAL:
+      if (value < 60 || value > MAX_UPLOAD_SPAN_MN * 60 || value % 60 != 0) {
+        LOG(LOG_W, "CFG", "interval=invalid value=%ld", (long)value);
+        return;
+      }
+      interval_mn = (uint8_t)(value / 60);
+      break;
+    default:  // hibernate not supported yet, or a mode from a later protocol
+      LOG(LOG_W, "CFG", "mode=unsupported code=%u", (unsigned)mode);
+      return;
+  }
+
+  if (interval_mn != power_manager.getIntervalOverride()) {
+    power_manager.setIntervalOverride(interval_mn);
+    LOG(LOG_I, "CFG", "mode=%s period=%u", interval_mn ? "interval" : "auto", (unsigned)power_manager.getPeriod());
+    syncAnemometerPowerMode();  // don't wait for the next cycle's STARTING
+  }
 }
 
 // Non-blocking state machine that drives the modem upload sequence.
@@ -83,7 +145,10 @@ void processModemStateMachine() {
 
       telemetry.onCycleStart(A7670_manager.isPoweredOn());
       A7670_manager.http_action_result = -1;
+      A7670_manager.http_body_length = -1;
+      A7670_manager.clearHttpBody();
       power_manager.evaluate();
+      syncAnemometerPowerMode();
 
       if (is_first_cycle_after_reset) {
         is_first_cycle_after_reset = false;
@@ -198,11 +263,11 @@ void processModemStateMachine() {
           period_mn = max(1u, (unsigned)((millis() - last_uploading_success_time + 30000UL) / 60000UL));
         }
 
-        if (period_mn > 10) {  // protocol limit
-          period_mn = 10;
+        if (period_mn > MAX_UPLOAD_SPAN_MN) {
+          period_mn = MAX_UPLOAD_SPAN_MN;
         }
 
-        Wtp_payload.setSampleCount(period_mn * 20);
+        Wtp_payload.setSampleCount(period_mn * 20);  // > 10 mn is sent as a minute count (flag bit 3)
         Wtp_payload.setTimestamp(A7670_manager.getUnixTime());
         Wtp_payload.setVoltage(power_manager.getVoltage());
 
@@ -219,6 +284,7 @@ void processModemStateMachine() {
         telemetry.setCpsi(A7670_manager.getCpsi());
         telemetry.setModemFirmware(A7670_manager.getFirmwareVersion());
 
+        telemetry.setRunningMode(power_manager.getIntervalOverride());
         telemetry.onSetHeaders();
         Wtp_payload.setMeta(telemetry.buildMeta());
 
@@ -244,7 +310,14 @@ void processModemStateMachine() {
         last_uploading_success_time = millis();
       }
       telemetry.onCycleResult(A7670_manager.http_action_result);
-      sm.waitFixed(GO_SLEEP, 0);
+      // A 200 body is "OK" (no running mode set, keep the current one) or the
+      // signed running-mode frame
+      if (A7670_manager.http_action_result == 200
+          && A7670_manager.http_body_length == WtpBinaryPayload::REPLY_SIZE) {
+        sm.waitFixed(READ_REPLY, 0);
+      } else {
+        sm.waitFixed(GO_SLEEP, 0);
+      }
       break;
 
     case ON_FAILED:
@@ -253,21 +326,41 @@ void processModemStateMachine() {
       sm.waitFixed(GO_SLEEP, 0);
       break;
 
-    case GO_SLEEP:
-      telemetry.onGoSleep();
-      // Hard-reset the modem if no upload has succeeded for MODEM_RESET_TIMEOUT_MN
-      // minutes, throttled to fire at most once per window
-      if (millis() - last_uploading_success_time > MODEM_RESET_TIMEOUT_MN * 60000UL
-          && millis() - last_modem_reset_time > MODEM_RESET_TIMEOUT_MN * 60000UL) {
-        last_modem_reset_time = millis();  // don't reset at every cycle
-        A7670_manager.powerOnOrReset();
-      } else if (power_manager.shouldPowerOff()) {
-        sendCommandToModem("AT+CPOF");
-      } else {
-        sendCommandToModem("AT+CSCLK=2");
+    case READ_REPLY:
+      {
+        A7670_manager.clearHttpBody();
+        char buffer[24];
+        sprintf(buffer, "AT+HTTPREAD=0,%u", (unsigned)WtpBinaryPayload::REPLY_SIZE);
+        sendCommandToModem(buffer);
+        // body bytes are captured raw between "+HTTPREAD: 22" and "+HTTPREAD: 0"
+        sm.waitForResponse("+HTTPREAD: 0", 3000, APPLY_REPLY, GO_SLEEP);
+        break;
       }
-      sm.setCurrent(SLEEP);
+
+    case APPLY_REPLY:
+      applyRunningModeReply();
+      sm.waitFixed(GO_SLEEP, 0);
       break;
+
+    case GO_SLEEP:
+      {
+        telemetry.onGoSleep();
+        A7670_manager.clearHttpBody();  // drops a capture a lost read left pending
+        // Hard-reset the modem if no upload has succeeded for the modem timeout,
+        // throttled to fire at most once per window
+        unsigned long modem_timeout = failureTimeoutMs(MODEM_RESET_TIMEOUT_MN, MODEM_RESET_MIN_CYCLES);
+        if (millis() - last_uploading_success_time > modem_timeout
+            && millis() - last_modem_reset_time > modem_timeout) {
+          last_modem_reset_time = millis();  // don't reset at every cycle
+          A7670_manager.powerOnOrReset();
+        } else if (power_manager.shouldPowerOff()) {
+          sendCommandToModem("AT+CPOF");
+        } else {
+          sendCommandToModem("AT+CSCLK=2");
+        }
+        sm.setCurrent(SLEEP);
+        break;
+      }
 
     case SLEEP:
       // re-entry handled in loop() via the upload-interval check
@@ -296,8 +389,8 @@ void setup() {
   telemetry.captureResetCause();
   telemetry.setVersion(SOFT_VERSION);
 
-  // boot sequence to power up TMAG: pulse PA15 low then high, then drive PB3 high
-  //PA15 and PB3 are unconnected for OnSpot serial < 130
+  // boot sequence to power up TMAG
+  // PA15 and PB3 are unconnected for OnSpot serial < 130
   pinMode(PA15, OUTPUT);
   digitalWrite(PA15, LOW); // discharge decoupling capacitor through resistor
   delay(200);
@@ -352,10 +445,9 @@ void loop() {
 
   feedWatchdog();
 
-  // If no upload has succeeded for MCU_RESET_TIMEOUT_MN
-  // minutes, reboot the whole MCU. Runs every loop, independent of the modem
-  // state machine.
-  if (millis() - last_uploading_success_time > MCU_RESET_TIMEOUT_MN * 60000UL) {
+  // If no upload has succeeded for the MCU timeout, reboot the whole MCU.
+  // Runs every loop, independent of the modem state machine.
+  if (millis() - last_uploading_success_time > failureTimeoutMs(MCU_RESET_TIMEOUT_MN, MCU_RESET_MIN_CYCLES)) {
     NVIC_SystemReset();
   }
 
@@ -377,6 +469,10 @@ void loop() {
   // parse lines sent by modem ouput and pass them to modules interested with them
   while (SerialA7670.available()) {
     char c = SerialA7670.read();
+    if (A7670_manager.isCapturingRaw()) {  // binary HTTP body, not lines
+      A7670_manager.onRawByte((uint8_t)c);
+      continue;
+    }
     if (c == '\n') {
       rx_buffer[rx_pointer] = '\0';
       A7670_manager.onLineReceived(rx_buffer);

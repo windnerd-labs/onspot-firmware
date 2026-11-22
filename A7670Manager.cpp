@@ -157,12 +157,19 @@ void A7670Manager::onLineReceived(const char* line) {
     LOG(LOG_D, "NET", "http=action");
 
     http_action_result = -1;
-    if (sscanf(line, "+HTTPACTION: %*d,%d,%*d", &http_action_result) == 1) {
+    http_body_length = -1;
+    if (sscanf(line, "+HTTPACTION: %*d,%d,%d", &http_action_result, &http_body_length) >= 1) {
       if (http_action_result == 200) {
         conn_state = ConnectivityState::NETWORK_OK;
       }
 
-      LOG(LOG_I, "NET", "http=%d", http_action_result);
+      LOG(LOG_I, "NET", "http=%d len=%d", http_action_result, http_body_length);
+    }
+  } else if (strncmp(line, "+HTTPREAD:", 10) == 0) {
+    // "+HTTPREAD: <n>" announces n raw body bytes; "+HTTPREAD: 0" ends the read
+    int n;
+    if (sscanf(line, "+HTTPREAD: %d", &n) == 1 && n > 0) {
+      raw_pending = (uint16_t)n;
     }
   } else if (strncmp(line, "+CSQ:", 5) == 0) {
     int csq;
@@ -194,6 +201,26 @@ void A7670Manager::onLineReceived(const char* line) {
       LOG(LOG_I, "MDM", "unix=%lu", (unsigned long)cclk_unix_time);
     }
   }
+}
+
+
+void A7670Manager::onRawByte(uint8_t b) {
+  if (raw_pending == 0) return;
+  raw_pending--;
+  // Bytes beyond the buffer are consumed and dropped
+  if (http_body_len < HTTP_BODY_BUF_LEN) {
+    http_body[http_body_len++] = b;
+  }
+}
+
+const uint8_t* A7670Manager::getHttpBody(uint8_t* len) const {
+  *len = http_body_len;
+  return http_body;
+}
+
+void A7670Manager::clearHttpBody() {
+  http_body_len = 0;
+  raw_pending = 0;
 }
 
 
