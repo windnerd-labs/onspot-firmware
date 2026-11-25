@@ -98,6 +98,11 @@ bool A7670Manager::readA7670StatusPin() {
   return digitalRead(A7670_STATUS) == HIGH;
 }
 
+void A7670Manager::releaseControlPins() {
+  digitalWrite(A7670_PWR_KEY, HIGH);
+  digitalWrite(A7670_RST, HIGH);
+}
+
 void A7670Manager::powerOnOrReset() {
 
   // Modem is about to be reset or just powered on — any prior SIM / PDP

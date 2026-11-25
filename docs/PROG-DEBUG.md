@@ -47,6 +47,11 @@ Upload frequency adapts to battery voltage
 (more frequent when full, backing off as it drains), and a watchdog plus staged
 modem/MCU resets keep a unit recovering on its own.
 
+**Hibernation.** The device hibernates when the server reply asks for it (the
+`hibernate` running mode) or when the battery drops below 3.55 V. The modem is
+powered off and the MCU enters STOP mode, waking every 2 s only to feed the
+watchdog.
+
 | File | Responsibility |
 | --- | --- |
 | [`onspot-firmware.ino`](../onspot-firmware.ino) | Setup, main loop, upload state machine |
@@ -55,6 +60,7 @@ modem/MCU resets keep a unit recovering on its own.
 | [`WtpBinaryPayload`](../WtpBinaryPayload.cpp) | Builds the signed WTP-bin frame |
 | [`Telemetry`](../Telemetry.cpp) | Collects diagnostic info to be uploaded in the `meta` field |
 | [`PowerManager`](../PowerManager.cpp) | Battery voltage tiers → upload period & power mode |
+| [`Hibernation`](../Hibernation.cpp) | STOP mode with RTC wakeups on LSI, reset at the end |
 | [`StatusIndicator`](../StatusIndicator.cpp) | Status-LED flash-count patterns |
 | [`MS5607`](../MS5607.cpp) | Optional barometric/temp sensor|
 | [`Logging.h`](../Logging.h) | Leveled serial logging |

@@ -169,7 +169,7 @@ A device runs in one mode at a time:
 | `0x00` | —           | —       | Reserved.                                                             |
 | `0x01` | `auto`      | OnSpot  | `0`. The firmware picks its upload interval itself. The default.      |
 | `0x02` | `interval`  | OnSpot  | Upload every `value` seconds: 60–1200, a multiple of 60.              |
-| `0x03` | `hibernate` | OnSpot  | `0`. No measuring; the firmware checks in at its own fixed period.    |
+| `0x03` | `hibernate` | OnSpot  | No measuring; check in every `value` hours, 1–168. `0`: the firmware's own period (OnSpot: `HIBERNATE_HOURS`). |
 
 The interval is whole minutes because the server aggregates samples into 1-minute records and drops an incomplete minute. An interval above 10 minutes needs flag bit 3 to fit its samples in one message.
 

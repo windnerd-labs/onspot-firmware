@@ -26,6 +26,8 @@ enum Modem_steps {
   READ_REPLY,   // fetch the running-mode frame from the HTTP body
   APPLY_REPLY,
   GO_SLEEP,
+  GO_HIBERNATE,  // modem off, then HIBERNATE
+  HIBERNATE,     // waits for the modem to be off, then hibernates until reset
   SLEEP,
   OFF
 };

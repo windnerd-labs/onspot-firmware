@@ -8,7 +8,8 @@
 //
 // Encoding (comma-separated key=value pairs, <=256 chars):
 //   ver   = firmware version string (SOFT_VERSION)
-//   rst   = reset cause of the last boot (IWDG/WWDG/LPWR/SFT/POR/PIN/UNK)
+//   rst   = reset cause of the last boot (IWDG/WWDG/LPWR/SFT/POR/PIN/UNK, or
+//           HIB when the boot ends a hibernation)
 //   up    = device uptime in seconds
 //   pwr   = 1 if A7670 was already powered at cycle start, else 0
 //   sh    = STARTING -> SET_HEADERS duration (ms, current cycle)
@@ -28,6 +29,10 @@ public:
   // One-shot at boot: reads and clears the MCU reset flags, latching the
   // decoded reset cause. Call before anything else touches the RCC flags.
   void captureResetCause();
+
+  // Overrides the decoded reset cause (e.g. "HIB"). The pointer must outlive
+  // this object (use a string literal).
+  void setResetCause(const char* code);
 
   // Latches the firmware version string reported in the `ver` meta field.
   // The pointer must outlive this object (use a string literal).

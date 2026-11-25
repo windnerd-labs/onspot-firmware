@@ -4,8 +4,7 @@
 
 
 // Voltage tiers sorted descending by min_voltage (highest tier first).
-// period_mn must not exceed 20: WTP-bin carries at most 20 minutes of samples
-// and the anemometer rolling buffer holds exactly that much.
+// period_mn must not exceed 20
 const PowerConfig power_configs[] = {
   { 4.05f, 1 },
   { 3.95f, 2 },
@@ -18,6 +17,13 @@ const PowerConfig power_configs[] = {
 
 
 #define HYSTERESIS 0.04f
+
+// Voltage is sampled on a fixed period rather than at every loop wake
+#define VOLTAGE_SAMPLE_PERIOD_MS 1000UL
+#define VOLTAGE_EMA_ALPHA 0.2f
+
+// Below this voltage the device hibernates (MCU stopped, modem off)
+#define HIBERNATE_BELOW_V 3.55f
 
 // Above this upload period the modem is powered off between uploads instead of
 // sleeping: re-registering costs less than idling that long
@@ -32,19 +38,22 @@ PowerManager::PowerManager(uint8_t pin) {
 }
 
 void PowerManager::loop() {
-  sampleVoltage();
+  if (millis() - _last_sample_ms >= VOLTAGE_SAMPLE_PERIOD_MS) {
+    sampleVoltage();
+  }
 }
 
 void PowerManager::sampleVoltage() {
   // Read and scale ADC: 2V reference, 10-bit, 3x voltage divider.
   float v = analogRead(_pin) * 2.0f / 1024 * 3.0f;
+  _last_sample_ms = millis();
 
-  // Exponential moving average (alpha = 0.1). Seed with first reading.
+  // Exponential moving average. Seed with first reading.
   if (!_seeded) {
     _voltage = v;
     _seeded = true;
   } else {
-    _voltage += (v - _voltage) * 0.02f;
+    _voltage += (v - _voltage) * VOLTAGE_EMA_ALPHA;
   }
 }
 
@@ -94,4 +103,8 @@ bool PowerManager::shouldPowerOn() const {
     if (_voltage >= power_configs[i].min_voltage) return true;
   }
   return false;
+}
+
+bool PowerManager::shouldHibernate() const {
+  return _voltage < HIBERNATE_BELOW_V;
 }

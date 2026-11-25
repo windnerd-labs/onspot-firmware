@@ -13,7 +13,7 @@ public:
   // hysteresis_v: voltage buffer applied on both sides of each threshold.
   PowerManager(uint8_t pin);
 
-  void loop();                  // call every loop tick: samples voltage
+  void loop();                  // call every loop tick: samples voltage once per second
   void evaluate();              // lock in the active tier from current voltage
   float getVoltage() const;     // filtered voltage (V)
   uint8_t getPeriod() const;    // upload period (minutes): operator interval if set, else current tier
@@ -23,6 +23,7 @@ public:
   void setIntervalOverride(uint8_t period_mn);
   uint8_t getIntervalOverride() const;
   bool shouldPowerOn() const;   // false when voltage is below all tiers
+  bool shouldHibernate() const; // battery too low even to wait for a recharge awake
 
 private:
   void sampleVoltage();  // sample ADC and update EMA
@@ -30,5 +31,6 @@ private:
   uint8_t _interval_override_mn = 0;
   uint8_t _pin = 0;
   float _voltage = 0.0f;
+  unsigned long _last_sample_ms = 0;
   bool _seeded = false;
 };

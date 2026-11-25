@@ -17,9 +17,16 @@
 #include "MS5607.h"
 #include "StatusIndicator.h"
 #include "Logging.h"
+#include "Hibernation.h"
 #include <Wire.h>
 
 #include "stm32g0xx_hal.h"  // necessary to change clock settings
+
+// WindNerd Core >= 1.7.0 is required (unknown vane direction, I2C bus
+// recovery).
+#if !defined(WN_DIR_UNKNOWN) || !defined(WN_I2C_ERR_BUS_STUCK)
+#error "WindNerd Core library 1.7.0 or later is required, update it in the Library Manager"
+#endif
 
 // Recovery timeouts, measured from the last successful upload. Both are stretched
 // for long upload periods, see failureTimeoutMs()
@@ -28,7 +35,16 @@
 #define MCU_RESET_TIMEOUT_MN 60  // last-resort: full MCU reset if no upload succeeds for this long
 #define MCU_RESET_MIN_CYCLES 4   // + half a period: leaves room for a cycle after the modem reset
 #define MAX_UPLOAD_SPAN_MN 20     // WTP-bin limit (flag bit 3) and anemometer rolling buffer length
-#define SOFT_VERSION "0.1.2"
+#define SOFT_VERSION "0.2.0"
+
+// Hibernation (operator running mode, or battery below HIBERNATE_BELOW_V in
+// PowerManager.cpp): modem off, MCU stopped, then a reset after a delay.
+#define HIBERNATE_MAX_HOURS 168
+#define HIBERNATE_HOURS 1
+static_assert(HIBERNATE_HOURS >= 1 && HIBERNATE_HOURS <= HIBERNATE_MAX_HOURS, "HIBERNATE_HOURS must be 1..168");
+//#define HIBERNATE_TEST_WAKEUPS 30  // bench tests: hibernate 30 wakeups (60 s) whatever the delay
+#define MODEM_OFF_TIMEOUT_MS 15000  // hibernate anyway if the modem is still on after this
+#define MODEM_OFF_RETRY_MS 5000     // AT+CPOF resent at this pace, a first one can be lost to UART sleep
 
 //#define APN "hologram"
 
@@ -63,6 +79,9 @@ unsigned long last_uploading_success_time = 0;  // updated only on a genuine upl
 unsigned long last_modem_reset_time = 0;        // throttles the modem hard-reset
 bool is_first_cycle_after_reset = true;
 bool was_modem_started = false;
+unsigned long hibernate_wait_start = 0;  // GO_HIBERNATE time, bounds the wait for the modem to power off
+unsigned long last_power_off_cmd = 0;
+uint8_t hibernate_hours = HIBERNATE_HOURS;  // delay of the hibernation GO_HIBERNATE starts
 
 #define RX_BUFFER_LENGTH 128
 char rx_buffer[RX_BUFFER_LENGTH];
@@ -95,15 +114,15 @@ void syncAnemometerPowerMode() {
 
 // Applies the running mode the operator set on windnerd.net, carried by the
 // reply to the upload (WTP-bin.md, "Reply"). The server repeats it in every
-// reply
-void applyRunningModeReply() {
+// reply. Returns the hours to hibernate when the operator asks for it, else 0.
+uint8_t applyRunningModeReply() {
   uint8_t len;
   const uint8_t* body = A7670_manager.getHttpBody(&len);
   uint8_t mode;
   int32_t value;
   if (!Wtp_payload.parseReply(body, len, &mode, &value)) {
     LOG(LOG_W, "CFG", "reply=invalid len=%u", (unsigned)len);
-    return;
+    return 0;
   }
 
   uint8_t interval_mn;
@@ -114,13 +133,23 @@ void applyRunningModeReply() {
     case WtpBinaryPayload::REPLY_MODE_INTERVAL:
       if (value < 60 || value > MAX_UPLOAD_SPAN_MN * 60 || value % 60 != 0) {
         LOG(LOG_W, "CFG", "interval=invalid value=%ld", (long)value);
-        return;
+        return 0;
       }
       interval_mn = (uint8_t)(value / 60);
       break;
-    default:  // hibernate not supported yet, or a mode from a later protocol
+    case WtpBinaryPayload::REPLY_MODE_HIBERNATE:
+      // Nothing to remember: hibernation ends with a reset, and the reply to
+      // the first upload after it says whether to go on hibernating
+      if (value < 0 || value > HIBERNATE_MAX_HOURS) {
+        LOG(LOG_W, "CFG", "hibernate=invalid value=%ld", (long)value);
+        return 0;
+      }
+      if (value == 0) value = HIBERNATE_HOURS;  // left to the firmware
+      LOG(LOG_I, "CFG", "mode=hibernate hours=%ld", (long)value);
+      return (uint8_t)value;
+    default:  // a mode from a later protocol
       LOG(LOG_W, "CFG", "mode=unsupported code=%u", (unsigned)mode);
-      return;
+      return 0;
   }
 
   if (interval_mn != power_manager.getIntervalOverride()) {
@@ -128,6 +157,35 @@ void applyRunningModeReply() {
     LOG(LOG_I, "CFG", "mode=%s period=%u", interval_mn ? "interval" : "auto", (unsigned)power_manager.getPeriod());
     syncAnemometerPowerMode();  // don't wait for the next cycle's STARTING
   }
+  return 0;
+}
+
+// Never returns: the MCU sleeps `hours`, then resets. Not marked
+// [[noreturn]]: the IDE's generated prototype would lack it and fail the build.
+void enterHibernation(uint8_t hours) {
+#ifdef HIBERNATE_TEST_WAKEUPS
+  uint32_t wakeups = HIBERNATE_TEST_WAKEUPS;
+#else
+  uint32_t wakeups = (uint32_t)hours * 3600UL / HIBERNATE_WAKEUP_S;
+#endif
+  LOG(LOG_I, "SYS", "hibernate=sleep hours=%u wakeups=%lu", (unsigned)hours, (unsigned long)wakeups);
+  SerialDebug.flush();
+  noInterrupts();
+  // speed, north and status LEDs, all open drain: HIGH releases them
+  digitalWrite(PA5, HIGH);
+  digitalWrite(PA6, HIGH);
+  digitalWrite(PA1, HIGH);
+  // TMAG supply pins (see setup()) to high impedance: the sensor is unpowered
+  // while hibernating, and the reset that ends it runs the boot power sequence
+  pinMode(PA15, INPUT_ANALOG);
+  pinMode(PB3, INPUT_ANALOG);
+  // TMAG I2C lines too, so their pull-ups can't back-power the unpowered sensor
+  pinMode(PB6, INPUT_ANALOG);
+  pinMode(PB7, INPUT_ANALOG);
+  // A failed power-on leaves PWRKEY held low, which can turn the modem on
+  // while hibernating
+  A7670_manager.releaseControlPins();
+  hibernate(wakeups);
 }
 
 // Non-blocking state machine that drives the modem upload sequence.
@@ -148,6 +206,15 @@ void processModemStateMachine() {
       A7670_manager.http_body_length = -1;
       A7670_manager.clearHttpBody();
       power_manager.evaluate();
+
+      // Checked at cycle start, the modem having been idle for a whole period:
+      // a transmit burst doesn't pull the reading down
+      if (power_manager.shouldHibernate()) {
+        hibernate_hours = HIBERNATE_HOURS;
+        sm.waitFixed(GO_HIBERNATE, 0);
+        break;
+      }
+
       syncAnemometerPowerMode();
 
       if (is_first_cycle_after_reset) {
@@ -338,8 +405,8 @@ void processModemStateMachine() {
       }
 
     case APPLY_REPLY:
-      applyRunningModeReply();
-      sm.waitFixed(GO_SLEEP, 0);
+      hibernate_hours = applyRunningModeReply();
+      sm.waitFixed(hibernate_hours ? GO_HIBERNATE : GO_SLEEP, 0);
       break;
 
     case GO_SLEEP:
@@ -362,6 +429,29 @@ void processModemStateMachine() {
         break;
       }
 
+    case GO_HIBERNATE:
+      LOG(LOG_I, "SYS", "hibernate=enter hours=%u mv=%d", (unsigned)hibernate_hours, (int)(power_manager.getVoltage() * 1000.0f + 0.5f));
+      hibernate_wait_start = millis();
+      last_power_off_cmd = 0;
+      sm.waitFixed(HIBERNATE, 0);
+      break;
+
+    case HIBERNATE:
+      // Power the modem off first, judged by its STATUS pin
+      if (A7670_manager.readA7670StatusPin()) {
+        if (millis() - hibernate_wait_start < MODEM_OFF_TIMEOUT_MS) {
+          if (last_power_off_cmd == 0 || millis() - last_power_off_cmd >= MODEM_OFF_RETRY_MS) {
+            sendCommandToModem("AT+CPOF");
+            last_power_off_cmd = millis();
+          }
+          sm.waitFixed(HIBERNATE, 500);
+          break;
+        }
+        LOG(LOG_W, "MDM", "power_off=timeout");
+      }
+      enterHibernation(hibernate_hours);
+      break;  // not reached
+
     case SLEEP:
       // re-entry handled in loop() via the upload-interval check
       break;
@@ -379,14 +469,13 @@ void initWatchdog() {
   IWDG->KR = 0xAAAA;
 }
 
-static inline void feedWatchdog(void) {
-  IWDG->KR = 0xAAAA;
-}
-
 
 void setup() {
   // Latch the reset cause from the RCC flags before anything else touches them.
   telemetry.captureResetCause();
+  if (hibernationWoke()) {
+    telemetry.setResetCause("HIB");  // a planned reset, not a crash
+  }
   telemetry.setVersion(SOFT_VERSION);
 
   // boot sequence to power up TMAG
@@ -499,7 +588,9 @@ void loop() {
   processModemStateMachine();
 
   // put the MCU to sleep, the WindNerd Core library uses a timer interrupt to wake it up automatically every 100ms
-  HAL_PWR_EnterSLEEPMode(PWR_LOWPOWERREGULATOR_ON, PWR_STOPENTRY_WFI);
+  // Main regulator: the low-power regulator would switch the MCU to Low-power run mode
+  // (PWR_CR1_LPR), which is limited to SYSCLK <= 2 MHz (RM0444), and SYSCLK is 8 MHz
+  HAL_PWR_EnterSLEEPMode(PWR_MAINREGULATOR_ON, PWR_SLEEPENTRY_WFI);
 }
 
 // this is an override to set the SYS clock at 8MHz in order to reduce power consumption

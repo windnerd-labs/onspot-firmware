@@ -24,6 +24,10 @@ public:
   void loop();
   void onLineReceived(const char* line);
   bool isPoweredOn();
+  bool readA7670StatusPin();  // raw STATUS pin, high while the modem is on
+  // Releases PWRKEY and RST (open drain, high-Z), ending any pulse in progress.
+  // Called before hibernating: a PWRKEY held low can power the modem on.
+  void releaseControlPins();
   int getRssi() const;
   // Serving-cell line from the last +CPSI response, sanitised
   const char* getCpsi() const;
@@ -51,8 +55,6 @@ public:
   static const int RSSI_UNKNOWN = 0x7F;
 
 private:
-  bool readA7670StatusPin();
-
   static const uint8_t CPSI_BUF_LEN = 96;
   static const uint8_t FW_BUF_LEN = 32;
   static const uint8_t HTTP_BODY_BUF_LEN = 32;

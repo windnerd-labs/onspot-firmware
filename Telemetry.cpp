@@ -21,6 +21,10 @@ void Telemetry::captureResetCause() {
   reset_cause = resetCauseCode();
 }
 
+void Telemetry::setResetCause(const char* code) {
+  reset_cause = code;
+}
+
 void Telemetry::setVersion(const char* v) {
   version = v;
 }
