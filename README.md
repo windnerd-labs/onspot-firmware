@@ -22,7 +22,9 @@ network. Insert a SIM card, mount it, switch it on, and your wind data starts fl
 
 This repository holds the **open source firmware** that runs inside the device. It's published for the advanced users who like to look under the hood or want to adapt it for another platform or other needs.
 
-If an update is ever needed for your device, you will be able to reprogram the firmware with the provided USB tool through a simple web application.
+If an update is ever needed for your device, you can reprogram the firmware with the provided USB tool through a simple web application, using Google Chrome or Microsoft Edge on a computer:
+
+🔄 **[Web programmer](https://windnerd.net/en/onspot-update)**
 
 📖 **[User documentation](https://windnerd.net/docs/onspot)**
 
@@ -31,7 +33,7 @@ If an update is ever needed for your device, you will be able to reprogram the f
 
 ## Developer documentation
 
-- [Programming & Debugging](docs/PROG-DEBUG.md) — building, flashing, reading the serial log, and how the firmware works.
+- [Programming & Debugging](docs/PROG-DEBUG.md) — the programming tool, flashing a release binary, building from source, reading the serial log, and how the firmware works.
 - [WTP-bin format](WTP-bin.md) — the signed binary upload format.
 
 ---

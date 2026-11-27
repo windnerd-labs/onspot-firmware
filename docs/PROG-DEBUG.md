@@ -13,6 +13,8 @@ port (e.g. `/dev/ttyUSB0` on Linux, `COMx` on Windows).
 - Match the pins when connecting: pins 1–6 of the programming tool go to
   pins 1–6 of the board.
 
+![Programming tool plugged onto the OnSpot board, pins 1 and 6 marked on the tool](prog-tool-connected.jpg)
+
 ### Entering bootloader mode
 
 1. Connect the programming tool to the board **before** powering it.
@@ -22,6 +24,11 @@ port (e.g. `/dev/ttyUSB0` on Linux, `COMx` on Windows).
 
 
 ## 2. Flash a release binary
+
+The simplest way to install the latest release is the
+[web programmer](https://windnerd.net/en/onspot-update): it runs in Google
+Chrome or Microsoft Edge with the programming tool, with nothing to install.
+The steps below do the same with STM32CubeProgrammer.
 
 ### Prerequisites
 
