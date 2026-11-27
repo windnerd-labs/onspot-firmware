@@ -1,6 +1,49 @@
 # Programming & Debugging
 
-## 1. Build & flash
+## 1. The programming tool
+
+The programming tool provided with the board is a **USB-serial converter with
+2 V logic levels**. It shows up on the computer as a standard virtual serial
+port (e.g. `/dev/ttyUSB0` on Linux, `COMx` on Windows).
+
+- It is used both for flashing (through the STM32 serial bootloader) and for
+  reading the serial log.
+- The board's UART runs at 2 V: a generic 3.3 V or 5 V USB-serial adapter is
+  not a drop-in substitute.
+- Match the pins when connecting: pins 1–6 of the programming tool go to
+  pins 1–6 of the board.
+
+### Entering bootloader mode
+
+1. Connect the programming tool to the board **before** powering it.
+2. Power up the OnSpot board. If it has booted correctly into programming
+   (bootloader) mode, no LEDs turn on. If they do, reset the board with the
+   push button until it starts in bootloader mode.
+
+
+## 2. Flash a release binary
+
+### Prerequisites
+
+- [STM32CubeProgrammer](https://www.st.com/en/development-tools/stm32cubeprog.html)
+- The programming tool provided with the board.
+
+### Steps
+
+1. Download `onspot-firmware-vX.Y.Z.bin` from the
+   [releases](https://github.com/windnerd-labs/onspot-firmware/releases) page.
+2. Put the board in bootloader mode (see [above](#entering-bootloader-mode)).
+3. In STM32CubeProgrammer, choose **UART**, select the tool's serial port and
+   click **Connect**.
+4. In *Erasing & Programming*, pick the `.bin` file, set the start address to
+   **`0x08000000`**, tick **Verify programming** and **Run after programming**,
+   then click **Start Programming**.
+
+The device ID and signing key live in the OTP area, which flashing does not
+touch: the board keeps its identity across updates.
+
+
+## 3. Build & flash from source
 
 This is an **Arduino** project for an **STM32G0K8Ux** microcontroller. The sketch entry point is [`onspot-firmware.ino`](../onspot-firmware.ino); all sources live alongside it in the repo root.
 Programming is done through the classic STM32 serial bootloader.
@@ -20,13 +63,19 @@ Programming is done through the classic STM32 serial bootloader.
 2. Select **STM32 MCU-based boards** under *Tools → Board*.
 3. Select **STM32G0K8Ux** board under *Tools → Board → STM32 boards*, and the
    correct upload method (STM32CubeProgrammer serial).
-4. Connect the prog tool to the board.
-5. Power up the OnSpot board. If it has booted correctly into programming (bootloader) mode, no LEDs should turn on. If they do, reset the board with the push button until it starts in bootloader mode.
+4. Put the board in bootloader mode (see [above](#entering-bootloader-mode)).
+5. Click **Upload**.
 
 
-## 2. Reading the serial log
+## 4. Reading the serial log
 
-Connect the programming tool to the board while the board is already powered (hot plug), so that it does not enter bootloader mode. Open the recognized virtual serial port at 115200 baud, for example: `minicom -D /dev/ttyUSB0 -b 115200`
+1. Plug the programming tool into the computer and open the recognized virtual
+   serial port at 115200 baud, for example: `minicom -D /dev/ttyUSB0 -b 115200`
+2. Only once the serial port is open, connect the programming tool to the board
+   while the board is already powered (hot plug), so that it does not enter
+   bootloader mode.
+
+The serial port must be opened **before** hot plugging.
 
 ```
 <ms> <LVL> <TAG> <body>
@@ -38,7 +87,7 @@ Connect the programming tool to the board while the board is already powered (ho
 - `<body>` — `key=value` details (modem traffic uses `>` for TX and `<` for RX)
 
 
-## 3. How it works
+## 5. How it works
 
 Wind samples are packed into the compact **WTP-bin** binary format and signed with
 HMAC-Blake2s before upload — the format is documented in
